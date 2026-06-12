@@ -1,0 +1,122 @@
+/**
+ * Jenkinsfile.multibranch
+ *
+ * Demonstrates branch-strategy patterns for a Multi-Branch Pipeline job.
+ *
+ * Branch behaviour:
+ *  main        → full pipeline including deploy to staging
+ *  release/*   → full pipeline + deploy to production (with approval)
+ *  feature/*   → install + lint + test only (no image push)
+ *  PR-*        → same as feature + post status back to GitHub
+ *
+ * Set "Script Path" to "Jenkinsfile.multibranch" in the Multi-Branch
+ * Pipeline job configuration.
+ */
+pipeline {
+    agent {
+        docker {
+            image 'python:3.12-slim'
+            args  '-v pip-cache:/root/.cache/pip'
+        }
+    }
+
+    options {
+        timestamps()
+        ansiColor('xterm')
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        skipDefaultCheckout(false)
+    }
+
+    stages {
+        stage('Install') {
+            steps {
+                dir('app') {
+                    sh 'pip install -r requirements.txt'
+                }
+            }
+        }
+
+        stage('Lint') {
+            steps {
+                dir('app') {
+                    sh 'flake8 . --max-line-length=120'
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                dir('app') {
+                    sh '''
+                        mkdir -p ../reports
+                        pytest tests/ \
+                          --junitxml=../reports/junit.xml \
+                          --cov=. --cov-report=xml:../reports/coverage.xml \
+                          -v
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit 'reports/junit.xml'
+                }
+            }
+        }
+
+        // Only build the Docker image on main and release branches
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch pattern: 'release/.*', comparator: 'REGEXP'
+                }
+            }
+            steps {
+                script {
+                    env.IMAGE_TAG = "my-org/flask-app:${env.GIT_COMMIT.take(7)}"
+                }
+                dir('app') {
+                    sh "docker build -t ${env.IMAGE_TAG} ."
+                }
+            }
+        }
+
+        // Push only from main
+        stage('Push & Deploy Staging') {
+            when { branch 'main' }
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'docker-hub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ${IMAGE_TAG}
+                    '''
+                }
+                deployApp(imageName: env.IMAGE_TAG, environment: 'staging')
+            }
+        }
+
+        // Release branches get a production deploy with human approval
+        stage('Deploy Production') {
+            when {
+                branch pattern: 'release/.*', comparator: 'REGEXP'
+            }
+            steps {
+                timeout(time: 2, unit: 'HOURS') {
+                    input message: "Deploy ${env.IMAGE_TAG} to PRODUCTION?", ok: 'Go'
+                }
+                deployApp(imageName: env.IMAGE_TAG, environment: 'production')
+            }
+        }
+    }
+
+    post {
+        always { cleanWs() }
+        success { notifySlack(status: 'SUCCESS') }
+        failure { notifySlack(status: 'FAILURE') }
+    }
+}

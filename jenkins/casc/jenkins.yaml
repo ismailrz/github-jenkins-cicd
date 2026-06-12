@@ -1,0 +1,93 @@
+# Jenkins Configuration as Code (JCasC)
+# This file configures Jenkins declaratively — no click-ops required.
+
+jenkins:
+  systemMessage: "Jenkins CI/CD Practice — configured via JCasC"
+  numExecutors: 2
+  scmCheckoutRetryCount: 2
+  mode: NORMAL
+
+  # Global credentials stored here; real secrets should come from env vars
+  # or a secrets manager (Vault, AWS SSM, etc.)
+  # See the 'credentials' section below.
+
+  agentProtocols:
+    - "JNLP4-connect"
+    - "Ping"
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          # Password injected from JENKINS_ADMIN_PASSWORD env var at runtime.
+          # Change this in docker-compose.yml or pass -e JENKINS_ADMIN_PASSWORD=...
+          password: "${JENKINS_ADMIN_PASSWORD:-admin}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  # Configure the shared library so every pipeline can call it without
+  # an explicit @Library annotation.
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "ORG_NAME"
+            value: "my-org"
+
+  globalLibraries:
+    libraries:
+      - name: "pipeline-library"
+        # In a real project this would point to a separate Git repo.
+        # Here we load it from the same repo (mounted via docker-compose).
+        defaultVersion: "main"
+        implicit: true          # available in every pipeline without @Library
+        allowVersionOverride: true
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "file:///shared-library"
+                credentialsId: ""
+
+  # Pipeline-specific settings
+  pipeline:
+    # Sandbox protects the controller; approved scripts bypass it.
+    # In practice, keep sandbox=true and use shared library for privileged ops.
+    globalSettings:
+      allowedCustomProperties: []
+
+security:
+  scriptApproval:
+    # Pre-approve the scripts your shared library uses so builds don't hang
+    # waiting for admin approval in a fresh environment.
+    approvedSignatures:
+      - "method groovy.lang.GroovyObject invokeMethod java.lang.String java.lang.Object"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          # Placeholder username/password — replace with real values or
+          # inject via environment variables using ${VAR_NAME} syntax.
+          - usernamePassword:
+              scope: GLOBAL
+              id: "docker-hub-creds"
+              description: "Docker Hub credentials"
+              username: "${DOCKERHUB_USER:-changeme}"
+              password: "${DOCKERHUB_PASS:-changeme}"
+          - string:
+              scope: GLOBAL
+              id: "sonar-token"
+              description: "SonarQube analysis token (demo placeholder)"
+              secret: "${SONAR_TOKEN:-demo-token}"
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+    adminAddress: "admin@example.com"
+  timestamper:
+    allPipelines: true
+  ansiColorBuildWrapper:
+    globalColorMapName: "xterm"

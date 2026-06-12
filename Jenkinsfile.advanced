@@ -1,0 +1,264 @@
+/**
+ * Jenkinsfile.advanced  —  standalone declarative pipeline
+ *
+ * Use this file to study individual advanced patterns without the shared
+ * library abstraction.  Every concept from vars/pythonPipeline.groovy is
+ * reproduced here with detailed comments.
+ *
+ * Load this file in Jenkins by creating a Pipeline job and setting
+ * "Script Path" to "Jenkinsfile.advanced".
+ */
+
+import com.myorg.GitUtils   // shared library class (src/)
+
+pipeline {
+
+    // ─────────────────────────────────────────────────────────────────────
+    // AGENTS
+    // ─────────────────────────────────────────────────────────────────────
+    // 'none' at the top level means each stage must declare its own agent.
+    // This lets you mix Docker agents, labelled nodes, and controller steps.
+    agent none
+
+    options {
+        timestamps()
+        ansiColor('xterm')
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '15', artifactNumToKeepStr: '5'))
+        disableConcurrentBuilds(abortPrevious: true)   // cancel the old build when a new one starts
+        skipStagesAfterUnstable()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PARAMETERS  — triggers a "Build with Parameters" form in the UI
+    // ─────────────────────────────────────────────────────────────────────
+    parameters {
+        choice(
+            name: 'TARGET_ENV',
+            choices: ['staging', 'production'],
+            description: 'Environment to deploy to'
+        )
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Skip the test stage (emergency deploys only)'
+        )
+        string(
+            name: 'IMAGE_TAG_OVERRIDE',
+            defaultValue: '',
+            description: 'Pin a specific Docker image tag (leave blank to build fresh)'
+        )
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ENVIRONMENT  — available in every stage
+    // ─────────────────────────────────────────────────────────────────────
+    environment {
+        APP_DIR    = 'app'
+        IMAGE_NAME = 'my-org/flask-app'
+        // credentials() binding — Jenkins injects DOCKER_CREDS_USR / _PSW
+        // from the stored credential; the secret never touches the source.
+        DOCKER_CREDS = credentials('docker-hub-creds')
+    }
+
+    stages {
+
+        // ── Stage 1: Checkout & introspect ──────────────────────────────
+        stage('Checkout') {
+            agent { label 'built-in' }   // run on the controller node
+            steps {
+                checkout scm
+                script {
+                    // Using the shared library CLASS (src/com/myorg/GitUtils.groovy)
+                    def git = new GitUtils(this)
+                    env.GIT_SHORT_SHA = git.shortSha()
+                    env.GIT_BRANCH    = git.branch()
+                    env.IMAGE_TAG     = params.IMAGE_TAG_OVERRIDE ?:
+                                        "${IMAGE_NAME}:${env.GIT_SHORT_SHA}"
+
+                    if (git.shouldSkipCi()) {
+                        currentBuild.result = 'NOT_BUILT'
+                        error('[skip ci] found in commit message — aborting')
+                    }
+                }
+                echo "Branch: ${env.GIT_BRANCH}  SHA: ${env.GIT_SHORT_SHA}"
+                stash name: 'source', includes: '**/*'   // pass workspace to later stages
+            }
+        }
+
+        // ── Stage 2: Parallel quality gates ─────────────────────────────
+        stage('Quality Gates') {
+            // Each parallel branch can declare its own agent.
+            parallel {
+                stage('Lint') {
+                    agent {
+                        docker {
+                            image 'python:3.12-slim'
+                            args  '-v pip-cache:/root/.cache/pip'
+                        }
+                    }
+                    steps {
+                        unstash 'source'
+                        dir(APP_DIR) {
+                            sh 'pip install -q flake8 && flake8 . --max-line-length=120'
+                        }
+                    }
+                }
+                stage('Security (Bandit)') {
+                    agent {
+                        docker { image 'python:3.12-slim' }
+                    }
+                    steps {
+                        unstash 'source'
+                        dir(APP_DIR) {
+                            sh 'pip install -q bandit && bandit -r . -ll -x ./tests'
+                        }
+                    }
+                }
+                stage('Dependency Audit') {
+                    agent {
+                        docker { image 'python:3.12-slim' }
+                    }
+                    steps {
+                        unstash 'source'
+                        dir(APP_DIR) {
+                            sh 'pip install -q pip-audit && pip-audit -r requirements.txt || true'
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Stage 3: Test ────────────────────────────────────────────────
+        stage('Test') {
+            when {
+                not { expression { return params.SKIP_TESTS } }
+            }
+            agent {
+                docker {
+                    image 'python:3.12-slim'
+                    args  '-v pip-cache:/root/.cache/pip'
+                }
+            }
+            steps {
+                unstash 'source'
+                dir(APP_DIR) {
+                    sh '''
+                        pip install -q -r requirements.txt
+                        mkdir -p ../reports
+                        pytest tests/ \
+                          --junitxml=../reports/junit.xml \
+                          --cov=. \
+                          --cov-report=xml:../reports/coverage.xml \
+                          --cov-fail-under=80 \
+                          -v
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit  allowEmptyResults: true, testResults: 'reports/junit.xml'
+                    cobertura coberturaReportFile: 'reports/coverage.xml', failNoReports: false
+                    archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+                }
+            }
+        }
+
+        // ── Stage 4: Build Docker image ──────────────────────────────────
+        stage('Build Image') {
+            when {
+                allOf {
+                    not { buildingTag() }
+                    expression { return !params.IMAGE_TAG_OVERRIDE }
+                }
+            }
+            // Use the controller because it has the Docker socket mounted
+            agent { label 'built-in' }
+            steps {
+                unstash 'source'
+                dir(APP_DIR) {
+                    sh """
+                        docker build \
+                          --build-arg GIT_SHA=${env.GIT_SHORT_SHA} \
+                          -t ${env.IMAGE_TAG} \
+                          -t ${IMAGE_NAME}:latest \
+                          .
+                    """
+                }
+            }
+        }
+
+        // ── Stage 5: Push ────────────────────────────────────────────────
+        stage('Push Image') {
+            when {
+                branch 'main'
+            }
+            agent { label 'built-in' }
+            steps {
+                // withCredentials — alternative scoped binding for single stage
+                withCredentials([usernamePassword(
+                    credentialsId: 'docker-hub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ${IMAGE_TAG}
+                        docker push ${IMAGE_NAME}:latest
+                    '''
+                }
+            }
+        }
+
+        // ── Stage 6: Deploy with approval gate ──────────────────────────
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { return params.TARGET_ENV == 'production' }
+                }
+            }
+            agent { label 'built-in' }
+            steps {
+                script {
+                    if (params.TARGET_ENV == 'production') {
+                        // Human gate — Jenkins emails the submitter list,
+                        // then waits (up to 1 hour) for approval.
+                        timeout(time: 1, unit: 'HOURS') {
+                            input(
+                                message: "Deploy ${env.IMAGE_TAG} to PRODUCTION?",
+                                ok: 'Approve',
+                                submitter: 'admin,release-team',
+                                parameters: [
+                                    string(name: 'CHANGE_TICKET',
+                                           description: 'Change management ticket number')
+                                ]
+                            )
+                        }
+                    }
+                }
+                deployApp(imageName: env.IMAGE_TAG, environment: params.TARGET_ENV)
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // POST  — runs after all stages regardless of outcome
+    // ─────────────────────────────────────────────────────────────────────
+    post {
+        always {
+            node('built-in') {
+                cleanWs()
+            }
+        }
+        success {
+            notifySlack(status: 'SUCCESS')
+        }
+        failure {
+            notifySlack(status: 'FAILURE')
+        }
+        unstable {
+            notifySlack(status: 'UNSTABLE', message: "Build unstable — check test results")
+        }
+    }
+}
