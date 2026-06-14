@@ -11,21 +11,6 @@ jenkins:
   # or a secrets manager (Vault, AWS SSM, etc.)
   # See the 'credentials' section below.
 
-  securityRealm:
-    local:
-      allowsSignup: false
-      users:
-        - id: "admin"
-          # Password injected from JENKINS_ADMIN_PASSWORD env var at runtime.
-          # Change this in docker-compose.yml or pass -e JENKINS_ADMIN_PASSWORD=...
-          password: "${JENKINS_ADMIN_PASSWORD:-admin}"
-
-  authorizationStrategy:
-    loggedInUsersCanDoAnything:
-      allowAnonymousRead: false
-
-  # Configure the shared library so every pipeline can call it without
-  # an explicit @Library annotation.
   globalNodeProperties:
     - envVars:
         env:
