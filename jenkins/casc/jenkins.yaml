@@ -56,7 +56,7 @@ unclassified:
           modernSCM:
             scm:
               git:
-                remote: "file:///shared-library"
+                remote: "https://github.com/ismailrz/github-jenkins-cicd.git"
                 credentialsId: ""
   timestamper:
     allPipelines: true
