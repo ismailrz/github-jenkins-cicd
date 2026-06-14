@@ -11,10 +11,6 @@ jenkins:
   # or a secrets manager (Vault, AWS SSM, etc.)
   # See the 'credentials' section below.
 
-  agentProtocols:
-    - "JNLP4-connect"
-    - "Ping"
-
   securityRealm:
     local:
       allowsSignup: false
@@ -35,28 +31,6 @@ jenkins:
         env:
           - key: "ORG_NAME"
             value: "my-org"
-
-  globalLibraries:
-    libraries:
-      - name: "pipeline-library"
-        # In a real project this would point to a separate Git repo.
-        # Here we load it from the same repo (mounted via docker-compose).
-        defaultVersion: "main"
-        implicit: true          # available in every pipeline without @Library
-        allowVersionOverride: true
-        retriever:
-          modernSCM:
-            scm:
-              git:
-                remote: "file:///shared-library"
-                credentialsId: ""
-
-  # Pipeline-specific settings
-  pipeline:
-    # Sandbox protects the controller; approved scripts bypass it.
-    # In practice, keep sandbox=true and use shared library for privileged ops.
-    globalSettings:
-      allowedCustomProperties: []
 
 security:
   scriptApproval:
@@ -87,6 +61,18 @@ unclassified:
   location:
     url: "http://localhost:8080/"
     adminAddress: "admin@example.com"
+  globalLibraries:
+    libraries:
+      - name: "pipeline-library"
+        defaultVersion: "main"
+        implicit: true
+        allowVersionOverride: true
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "file:///shared-library"
+                credentialsId: ""
   timestamper:
     allPipelines: true
   ansiColorBuildWrapper:

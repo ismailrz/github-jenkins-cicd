@@ -20,9 +20,9 @@ USER jenkins
 
 # Skip the setup wizard; version managed via JCasC
 ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false"
-ENV CASC_JENKINS_CONFIG=/var/jenkins_home/casc
+# Point at the bind-mounted source so edits to jenkins/casc/jenkins.yaml
+# take effect on container restart without a rebuild.
+ENV CASC_JENKINS_CONFIG=/shared-library/jenkins/casc
 
 COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
-
-COPY casc/ /var/jenkins_home/casc/
