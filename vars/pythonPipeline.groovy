@@ -38,19 +38,20 @@ def call(Map config = [:]) {
 
         // --------------- Environment / credentials ---------------
         environment {
-            // credentials() binding — pulls from Jenkins credential store.
-            // The actual secret never appears in logs or the Groovy source.
             DOCKER_CREDS = credentials('docker-hub-creds')
-            // Derived values
-            GIT_SHORT_SHA = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'unknown'
-            IMAGE_TAG     = "${imageName}:${GIT_SHORT_SHA}"
-            IMAGE_LATEST  = "${imageName}:latest"
+            IMAGE_LATEST = "${imageName}:latest"
         }
 
         stages {
             // ---- 1. Install dependencies ----
             stage('Install') {
                 steps {
+                    script {
+                        // GIT_COMMIT is set by Jenkins after checkout; compute
+                        // derived image tag here so all later stages can use it.
+                        env.GIT_SHORT_SHA = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'unknown'
+                        env.IMAGE_TAG = "${imageName}:${env.GIT_SHORT_SHA}"
+                    }
                     dir(appDir) {
                         sh 'pip install -r requirements.txt'
                     }
