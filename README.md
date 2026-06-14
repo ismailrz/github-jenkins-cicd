@@ -37,7 +37,7 @@ A self-contained Jenkins CI/CD practice environment with a Python Flask app, Doc
 │   └── GitUtils.groovy          # Shared library class (instance state, private helpers)
 │
 ├── app/                         # Flask REST API
-│   ├── app.py                   # Application code
+│   ├── app.py
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── tests/
@@ -47,6 +47,8 @@ A self-contained Jenkins CI/CD practice environment with a Python Flask app, Doc
 ├── jenkins/
 │   ├── Dockerfile               # Custom Jenkins LTS image with Docker CLI + plugins
 │   ├── plugins.txt              # Plugins baked in at image build time
+│   ├── init.groovy.d/
+│   │   └── 01-create-admin.groovy   # Creates admin user on first boot
 │   └── casc/
 │       └── jenkins.yaml         # Jenkins Configuration as Code
 │
@@ -58,91 +60,233 @@ A self-contained Jenkins CI/CD practice environment with a Python Flask app, Doc
 
 ---
 
-## Prerequisites
+## Deploy locally (macOS / Linux)
 
-- Docker Desktop (or Docker Engine + Compose plugin)
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS / Windows) or Docker Engine + Compose plugin (Linux)
 - Git
+
+### Steps
+
+**1. Clone the repo**
+
+```bash
+git clone https://github.com/ismailrz/github-jenkins-cicd.git
+cd github-jenkins-cicd
+```
+
+**2. Set your admin password**
+
+```bash
+# .env is already in .gitignore — safe to put real values here
+echo "JENKINS_ADMIN_PASSWORD=yourpassword" > .env
+```
+
+**3. Start Jenkins**
+
+```bash
+docker compose up -d --build jenkins
+```
+
+Jenkins takes ~60 seconds on first boot to install plugins.
+
+**4. Open the UI**
+
+```
+http://localhost:8080
+```
+
+Login: `admin` / the password you set in `.env`
+
+**5. Create a pipeline job**
+
+1. **New Item** → name it → **Pipeline** → OK
+2. Pipeline section → Definition: **Pipeline script from SCM**
+3. SCM: **Git**, Repository URL: `https://github.com/ismailrz/github-jenkins-cicd.git`
+4. Branch Specifier: `*/main`
+5. Script Path: `Jenkinsfile`
+6. **Save** → **Build Now**
+
+### Stopping
+
+```bash
+docker compose down        # stop, keep Jenkins data
+docker compose down -v     # stop and wipe all data (fresh start)
+```
 
 ---
 
-## Quick start
+## Deploy to AWS (EC2 + Docker Compose)
+
+### Prerequisites
+
+- An AWS account
+- AWS CLI or console access
+
+### 1. Launch an EC2 instance
+
+| Setting | Value |
+|---|---|
+| AMI | Ubuntu 24.04 LTS |
+| Instance type | `t3.medium` (minimum — Jenkins needs 2 vCPU / 4 GB RAM) |
+| Storage | 20 GB gp3 |
+| Key pair | Create or select one for SSH access |
+
+**Security group — open these ports:**
+
+| Port | Source | Purpose |
+|---|---|---|
+| 22 | Your IP | SSH |
+| 8080 | 0.0.0.0/0 | Jenkins UI |
+| 50000 | 0.0.0.0/0 | Jenkins inbound agents |
+
+### 2. SSH in and install Docker
 
 ```bash
-# 1. Boot Jenkins
-docker compose up -d --build jenkins
+ssh -i your-key.pem ubuntu@<EC2-PUBLIC-IP>
 
-# 2. Wait ~60 s, then open the UI
-open http://localhost:8080
-# Login: admin / admin  (set JENKINS_ADMIN_PASSWORD in .env to change)
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker ubuntu
+newgrp docker
 
-# 3. Initialise a local git repo (required for the shared library)
-git init && git add . && git commit -m "init"
+# Install Compose plugin
+sudo apt-get install -y docker-compose-plugin
 ```
 
-Or use the helper script which does all three steps:
+### 3. Clone the repo and configure
 
 ```bash
-./scripts/setup.sh
+git clone https://github.com/ismailrz/github-jenkins-cicd.git
+cd github-jenkins-cicd
+
+# Set your admin password
+echo "JENKINS_ADMIN_PASSWORD=yourpassword" > .env
+```
+
+### 4. Start Jenkins
+
+```bash
+docker compose up -d --build jenkins
+```
+
+Wait ~60 seconds, then open:
+
+```
+http://<EC2-PUBLIC-IP>:8080
+```
+
+Login: `admin` / the password you set in `.env`
+
+### 5. Create a pipeline job
+
+Same as local — use the GitHub URL for the repository:
+
+1. **New Item** → name it → **Pipeline** → OK
+2. Pipeline → Definition: **Pipeline script from SCM**
+3. SCM: **Git**, Repository URL: `https://github.com/ismailrz/github-jenkins-cicd.git`
+4. Branch Specifier: `*/main`
+5. Script Path: `Jenkinsfile`
+6. **Save** → **Build Now**
+
+### 6. (Optional) Add a domain + HTTPS
+
+```bash
+sudo apt install -y nginx certbot python3-certbot-nginx
+```
+
+Create `/etc/nginx/sites-available/jenkins`:
+
+```nginx
+server {
+    listen 80;
+    server_name jenkins.yourdomain.com;
+
+    location / {
+        proxy_pass         http://localhost:8080;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/jenkins /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d jenkins.yourdomain.com
+```
+
+Then update `jenkins/casc/jenkins.yaml` to reflect the real URL:
+
+```yaml
+unclassified:
+  location:
+    url: "https://jenkins.yourdomain.com/"
+```
+
+### 7. Keep Jenkins running across reboots
+
+```bash
+sudo systemctl enable docker
+# docker-compose already uses restart: unless-stopped
+```
+
+### Stopping / fresh start on EC2
+
+```bash
+docker compose down        # stop, keep Jenkins data
+docker compose down -v     # stop and wipe all data
 ```
 
 ---
 
 ## Creating pipeline jobs
 
-### Option A — Simple Pipeline (uses shared library)
+### Option A — Simple Pipeline
 
-1. Jenkins UI → **New Item** → **Pipeline**
-2. Pipeline → Definition: **Pipeline script from SCM**
-3. SCM: **Git**, Repository URL: `file:///path/to/this/repo`
-4. Script Path: `Jenkinsfile`
-5. Save → **Build Now**
+Uses the shared library — `Jenkinsfile` is a single call to `pythonPipeline()`:
 
-`Jenkinsfile` is a single call to `pythonPipeline()`. All the implementation is in `vars/pythonPipeline.groovy`.
+1. **New Item** → **Pipeline** → OK
+2. Definition: **Pipeline script from SCM**
+3. SCM: **Git**, Repository URL: `https://github.com/ismailrz/github-jenkins-cicd.git`
+4. Branch Specifier: `*/main`, Script Path: `Jenkinsfile`
+5. **Save** → **Build Now**
 
 ### Option B — Advanced Pipeline (all patterns inline)
 
-Same steps as above but set Script Path to `Jenkinsfile.advanced`.
-
-This file is heavily commented and demonstrates every advanced pattern directly — Docker agents, parallel stages, credentials binding, `when` conditions, build parameters, and the human approval gate.
+Same steps but set Script Path to `Jenkinsfile.advanced`. Heavily commented — every advanced pattern is explained inline.
 
 ### Option C — Multi-Branch Pipeline
 
-1. Jenkins UI → **New Item** → **Multibranch Pipeline**
-2. Branch Sources → **Git**, Repository URL: `file:///path/to/this/repo`
-3. Build Configuration → Script Path: `Jenkinsfile.multibranch`
-4. Save
-
-Jenkins scans all branches and applies the appropriate behaviour:
+1. **New Item** → **Multibranch Pipeline** → OK
+2. Branch Sources → **Git**, Repository URL: `https://github.com/ismailrz/github-jenkins-cicd.git`
+3. Script Path: `Jenkinsfile.multibranch`
+4. **Save** — Jenkins scans all branches automatically
 
 | Branch | Stages run |
 |---|---|
 | `main` | Install → Lint → Test → Build image → Push → Deploy staging |
 | `release/*` | Same as main + Deploy production (with approval) |
 | `feature/*` | Install → Lint → Test only |
-| Pull requests | Same as feature + GitHub status check |
 
 ---
 
 ## Shared library
 
-The `vars/` and `src/` directories form a Jenkins Shared Library. Jenkins is configured via JCasC to load it automatically from this repo, so pipelines don't need an explicit `@Library` annotation.
+The `vars/` and `src/` directories form a Jenkins Shared Library loaded automatically from this repo via JCasC — no `@Library` annotation needed in pipelines.
 
 ### Global vars (`vars/`)
 
-Each `.groovy` file in `vars/` becomes a callable step:
-
 ```groovy
-// Any Jenkinsfile can call these directly:
 pythonPipeline(appDir: 'app', pythonVersion: '3.12')
-
 deployApp(imageName: 'my-org/flask-app:abc123', environment: 'staging')
-
 notifySlack(status: 'FAILURE')
 ```
 
 ### Library classes (`src/`)
-
-Classes under `src/` are imported explicitly and support instance state and private methods:
 
 ```groovy
 import com.myorg.GitUtils
@@ -154,24 +298,18 @@ git.shouldSkipCi()        // true if [skip ci] in last commit message
 git.tagCommit('v1.2.3')   // push a git tag from the pipeline
 ```
 
-### When to use vars vs classes
-
-Use a **global var** (`vars/`) when you want a step that reads like a built-in Jenkins step (`sh`, `checkout`, etc.) — clean call-site syntax, no import needed.
-
-Use a **class** (`src/`) when you need instance state shared across method calls, private helper methods, or cleaner namespacing.
+**vars/ vs src/:** Use `vars/` for steps that should read like built-in Jenkins steps. Use `src/` when you need instance state, private helpers, or namespacing.
 
 ---
 
 ## Credentials
-
-Credentials are configured in `jenkins/casc/jenkins.yaml`. Secrets are injected via environment variables — never hardcoded.
 
 | Credential ID | Type | Used for |
 |---|---|---|
 | `docker-hub-creds` | Username/Password | `docker login` in Push stage |
 | `sonar-token` | Secret text | SonarQube analysis (placeholder) |
 
-Set real values in `.env` before running:
+Set real values in `.env`:
 
 ```bash
 DOCKERHUB_USER=myuser
@@ -181,13 +319,13 @@ DOCKERHUB_PASS=mypassword
 ### Using credentials in a pipeline
 
 ```groovy
-// Pattern 1 — environment variable binding (available in all stages)
+// Pattern 1 — environment variable binding
 environment {
     DOCKER_CREDS = credentials('docker-hub-creds')
-    // Injects: DOCKER_CREDS_USR and DOCKER_CREDS_PSW
+    // Injects DOCKER_CREDS_USR and DOCKER_CREDS_PSW — masked in logs
 }
 
-// Pattern 2 — scoped to a single block (preferred for tighter scope)
+// Pattern 2 — scoped to a single block
 withCredentials([usernamePassword(
     credentialsId: 'docker-hub-creds',
     usernameVariable: 'USER',
@@ -196,8 +334,6 @@ withCredentials([usernamePassword(
     sh 'echo $PASS | docker login -u $USER --password-stdin'
 }
 ```
-
-Both patterns mask the secret in build logs automatically.
 
 ---
 
@@ -210,13 +346,13 @@ Install → Quality Gates (parallel) → Test → Build Image → Push Image →
                 └─ Dependency Audit
 ```
 
-The Push and Deploy stages are gated by `when { branch 'main' }` so feature branches only run the first three stages.
+Push and Deploy only run on the `main` branch.
 
 ---
 
 ## Human approval gate
 
-The `deployApp` step pauses the build and waits for a named approver before touching production:
+The `deployApp` step pauses the build before production and waits up to 1 hour for a named approver:
 
 ```groovy
 input(
@@ -226,20 +362,19 @@ input(
 )
 ```
 
-The build waits up to 1 hour (configurable via `timeout`). If nobody approves, the build is aborted and the deployment does not happen.
-
 ---
 
 ## Running the app locally
 
 ```bash
-# Start the Flask app on port 5000
 docker compose --profile deploy up -d app
 
 curl http://localhost:5000/health
 # {"status": "ok"}
 
-curl -X POST http://localhost:5000/items -H 'Content-Type: application/json' -d '{"name": "widget"}'
+curl -X POST http://localhost:5000/items \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "widget"}'
 # {"id": 1, "name": "widget"}
 ```
 
@@ -251,13 +386,4 @@ curl -X POST http://localhost:5000/items -H 'Content-Type: application/json' -d 
 cd app
 pip install -r requirements.txt
 pytest tests/ -v --cov=. --cov-report=term-missing
-```
-
----
-
-## Stopping everything
-
-```bash
-docker compose down          # stop containers, keep jenkins_home volume
-docker compose down -v       # stop and delete all data (fresh start)
 ```
