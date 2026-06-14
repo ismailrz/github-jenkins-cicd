@@ -42,7 +42,7 @@ def call(Map config = [:]) {
             // The actual secret never appears in logs or the Groovy source.
             DOCKER_CREDS = credentials('docker-hub-creds')
             // Derived values
-            GIT_SHORT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+            GIT_SHORT_SHA = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'unknown'
             IMAGE_TAG     = "${imageName}:${GIT_SHORT_SHA}"
             IMAGE_LATEST  = "${imageName}:latest"
         }
