@@ -15,6 +15,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Mount this repo as the shared library source (see JCasC globalLibraries)
       - ./:/shared-library
+    user: root   # needed for docker socket access on macOS + Linux
     environment:
       JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:-admin}
       DOCKERHUB_USER: ${DOCKERHUB_USER:-}
