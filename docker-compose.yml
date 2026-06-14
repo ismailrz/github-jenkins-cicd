@@ -20,6 +20,8 @@ services:
       DOCKERHUB_USER: ${DOCKERHUB_USER:-}
       DOCKERHUB_PASS: ${DOCKERHUB_PASS:-}
       SONAR_TOKEN: ${SONAR_TOKEN:-}
+    group_add:
+      - "${DOCKER_GID:-999}"  # grants jenkins access to the host docker socket
     networks:
       - cicd
 
