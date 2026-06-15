@@ -105,9 +105,12 @@ def call(Map config = [:]) {
             }
 
             // ---- 4. Build Docker image ----
+            // Runs on the Jenkins node (not the Python container) so Docker CLI is available.
             stage('Build Image') {
+                agent { label '' }
                 // Only build images on main / feature branches; skip on tags
                 when {
+                    beforeAgent true
                     not { buildingTag() }
                 }
                 steps {
@@ -119,14 +122,13 @@ def call(Map config = [:]) {
 
             // ---- 5. Push to registry ----
             stage('Push Image') {
+                agent { label '' }
                 when {
+                    beforeAgent true
                     // Only push from the deploy branch (e.g. main)
                     branch deployBranch
                 }
                 steps {
-                    // withCredentials gives tightly-scoped access to the secret.
-                    // DOCKER_CREDS_USR / DOCKER_CREDS_PSW are set automatically
-                    // by the credentials() binding above.
                     sh '''
                         echo "${DOCKER_CREDS_PSW}" | \
                           docker login -u "${DOCKER_CREDS_USR}" --password-stdin
@@ -138,7 +140,9 @@ def call(Map config = [:]) {
 
             // ---- 6. Deploy ----
             stage('Deploy') {
+                agent { label '' }
                 when {
+                    beforeAgent true
                     branch deployBranch
                 }
                 steps {
