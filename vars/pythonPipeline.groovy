@@ -55,10 +55,11 @@ def call(Map config = [:]) {
 
             // ---- 2. Parallel quality gates ----
             // Running lint and security scan in parallel cuts wall-clock time.
+            // agent must be on each branch — not on the parent parallel stage.
             stage('Quality Gates') {
-                agent { docker { image pythonImage; args pythonArgs } }
                 parallel {
                     stage('Lint') {
+                        agent { docker { image pythonImage; args pythonArgs } }
                         steps {
                             dir(appDir) {
                                 sh 'flake8 . --count --max-line-length=120 --statistics'
@@ -66,6 +67,7 @@ def call(Map config = [:]) {
                         }
                     }
                     stage('Security Scan') {
+                        agent { docker { image pythonImage; args pythonArgs } }
                         steps {
                             dir(appDir) {
                                 sh 'bandit -r . -ll -x ./tests'
