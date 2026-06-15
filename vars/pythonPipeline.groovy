@@ -98,9 +98,8 @@ def call(Map config = [:]) {
                     always {
                         // Publish JUnit results — visible in the build UI
                         junit 'reports/junit.xml'
-                        // Publish coverage — requires Cobertura plugin
-                        cobertura coberturaReportFile: 'reports/coverage.xml',
-                                  failNoReports: false
+                        // Publish coverage — requires Coverage plugin
+                        recordCoverage(tools: [[parser: 'COBERTURA', pattern: 'reports/coverage.xml']])
                     }
                 }
             }

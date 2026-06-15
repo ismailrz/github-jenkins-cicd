@@ -14,7 +14,7 @@ timestamper:latest
 ansicolor:latest
 warnings-ng:latest
 junit:latest
-cobertura:latest
+coverage:latest
 ws-cleanup:latest
 build-timeout:latest
 throttle-concurrents:latest
