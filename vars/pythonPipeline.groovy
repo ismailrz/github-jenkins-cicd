@@ -62,6 +62,7 @@ def call(Map config = [:]) {
                         agent { docker { image pythonImage; args pythonArgs } }
                         steps {
                             dir(appDir) {
+                                sh 'pip install -r requirements.txt -q'
                                 sh 'flake8 . --count --max-line-length=120 --statistics'
                             }
                         }
@@ -70,6 +71,7 @@ def call(Map config = [:]) {
                         agent { docker { image pythonImage; args pythonArgs } }
                         steps {
                             dir(appDir) {
+                                sh 'pip install -r requirements.txt -q'
                                 sh 'bandit -r . -ll -x ./tests'
                             }
                         }
@@ -82,6 +84,7 @@ def call(Map config = [:]) {
                 agent { docker { image pythonImage; args pythonArgs } }
                 steps {
                     dir(appDir) {
+                        sh 'pip install -r requirements.txt -q'
                         sh '''
                             pytest tests/ \
                               --junitxml=../reports/junit.xml \
