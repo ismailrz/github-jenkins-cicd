@@ -105,10 +105,14 @@ def call(Map config = [:]) {
             }
 
             // ---- 4. Build Docker image ----
-            // Runs on the Jenkins node (not the Python container) so Docker CLI is available.
+            // docker:cli agent provides Docker CLI via DooD (socket passed through --volumes-from).
             stage('Build Image') {
-                agent { label '' }
-                // Only build images on main / feature branches; skip on tags
+                agent {
+                    docker {
+                        image 'docker:cli'
+                        args  '-v /var/run/docker.sock:/var/run/docker.sock'
+                    }
+                }
                 when {
                     beforeAgent true
                     not { buildingTag() }
@@ -122,10 +126,14 @@ def call(Map config = [:]) {
 
             // ---- 5. Push to registry ----
             stage('Push Image') {
-                agent { label '' }
+                agent {
+                    docker {
+                        image 'docker:cli'
+                        args  '-v /var/run/docker.sock:/var/run/docker.sock'
+                    }
+                }
                 when {
                     beforeAgent true
-                    // Only push from the deploy branch (e.g. main)
                     branch deployBranch
                 }
                 steps {
