@@ -6,6 +6,11 @@ _items: dict[int, dict] = {}
 _next_id = 1
 
 
+@app.route("/")
+def home():
+    return jsonify({"message": "Flask CICD App", "endpoints": ["/health", "/items"]})
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
